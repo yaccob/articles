@@ -435,11 +435,34 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 @media amzn-kf8{#header,#content,#footnotes,#footer{padding:0}}
 </style>
 </head>
-<body class="book">
+<body class="book toc2 toc-left">
 <div id="header">
 <h1>AI as Workflow Servant<br></h1>
 <div class="details">
 <span id="author" class="author">How Deterministic Scripts Tame AI Unpredictability</span><br>
+</div>
+<div id="toc" class="toc2">
+<div id="toctitle">Table of Contents</div>
+<ul class="sectlevel1">
+<li><a href="#_the_problem">The Problem</a></li>
+<li><a href="#_the_insight_ai_and_humans_are_equally_unpredictable">The Insight: AI and Humans Are Equally Unpredictable</a></li>
+<li><a href="#_the_pattern_orchestrator_as_master">The Pattern: Orchestrator as Master</a></li>
+<li><a href="#_how_it_works">How It Works</a></li>
+<li><a href="#_advantages">Advantages</a>
+<ul class="sectlevel2">
+<li><a href="#_security_by_architecture">Security by Architecture</a></li>
+</ul>
+</li>
+<li><a href="#_disadvantages_trade_offs">Disadvantages &amp; Trade-offs</a></li>
+<li><a href="#_when_to_use_this_pattern">When to Use This Pattern</a></li>
+<li><a href="#_when_not_to_use_it">When NOT to Use It</a></li>
+<li><a href="#_key_principles">Key Principles</a></li>
+<li><a href="#_from_pattern_to_practice">From Pattern to Practice</a>
+<ul class="sectlevel2">
+<li><a href="#_self_generating_workflows">Self-Generating Workflows</a></li>
+</ul>
+</li>
+</ul>
 </div>
 </div>
 <div id="content">
@@ -564,12 +587,136 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Recoverable</strong></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">If an answer causes a validation error or runtime failure, the orchestrator can re-ask. The evaluation of "correct" or "incorrect" is itself deterministic — defined by the script, not by judgment.</p></td>
 </tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Narrow information boundary</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The respondent only sees what the orchestrator explicitly includes in its <code>input()</code> prompts — never the full workflow state, file system, environment variables, or API responses. This inherent need-to-know boundary makes the pattern amenable to privilege separation — see <em>Security by Architecture</em> below.</p></td>
+</tr>
 </tbody>
+</table>
+<div class="sect2">
+<h3 id="_security_by_architecture">Security by Architecture</h3>
+<div class="paragraph">
+<p>The pattern described in this article creates a natural <strong>privilege separation</strong> — not by accident, but by design. Because the orchestrator is a standalone CLI program that communicates with its respondent exclusively via <code>input()</code> on stdin, the respondent — whether human or AI — <strong>never needs access to secrets, credentials, or elevated permissions</strong>.</p>
+</div>
+<div class="sect3">
+<h4 id="_the_privilege_boundary">The Privilege Boundary</h4>
+<div class="paragraph">
+<p>Consider a workflow that deploys to production, reads database credentials, or accesses an internal API with a service account. In a typical AI-assisted approach, the AI agent would need those credentials itself — they would appear in its context window, its logs, or its environment. This is a security liability.</p>
+</div>
+<div class="paragraph">
+<p>With the orchestrator pattern, the architecture looks different:</p>
+</div>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 33.3333%;">
+<col style="width: 33.3333%;">
+<col style="width: 33.3334%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Layer</th>
+<th class="tableblock halign-left valign-top">Runs as</th>
+<th class="tableblock halign-left valign-top">Knows secrets?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>AI agent</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Unprivileged user</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">No — only sees the orchestrator&#8217;s <code>input()</code> prompts and provides answers on stdin</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Orchestrator</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Privileged user (via <code>sudo</code> or setuid wrapper)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Yes — reads credentials from keychain, vault, or protected files</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Sub-scripts</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Inherit orchestrator&#8217;s privileges</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Yes — use secrets for API calls, DB access, etc.</p></td>
+</tr>
+</tbody>
+</table>
+<div class="paragraph">
+<p>The AI is confined to the <strong>creative, unprivileged</strong> side of the boundary. Secrets flow within the deterministic, scripted pipeline — never across the stdin/stdout interface where the AI sits.</p>
+</div>
+</div>
+<div class="sect3">
+<h4 id="_enforcing_the_boundary_on_unix_systems">Enforcing the Boundary on Unix Systems</h4>
+<div class="paragraph">
+<p>On Linux and macOS, the orchestrator can run with elevated privileges using two mechanisms:</p>
+</div>
+<div class="paragraph">
+<p><strong>Option 1: <code>sudo</code> with a dedicated rule</strong> (recommended for most cases):</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre># /etc/sudoers.d/workflow
+copilot_user ALL=(deploy_svc) NOPASSWD: /opt/workflows/orchestrate.py</pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The AI agent runs as <code>copilot_user</code> and invokes the orchestrator via <code>sudo -u deploy_svc</code>. The orchestrator runs as <code>deploy_svc</code>, which owns the credentials. Simple, auditable, no compilation needed.</p>
+</div>
+<div class="paragraph">
+<p><strong>Option 2: setuid wrapper</strong> (for environments where sudo configuration is impractical):</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-c" data-lang="c">// wrapper.c — compiled, owned by deploy_svc, chmod u+s
+#include &lt;unistd.h&gt;
+int main(int argc, char *argv[]) {
+    execv("/opt/workflows/orchestrate.py", argv);
+    return 1;
+}</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The wrapper runs as <code>deploy_svc</code> regardless of who invokes it. The orchestrator inherits those privileges. The AI agent — answering on stdin — remains unprivileged.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+The setuid bit is ignored for interpreted scripts (shebang files) on both Linux and macOS. A compiled wrapper is required when using this approach.
+</td>
+</tr>
 </table>
 </div>
 </div>
+<div class="sect3">
+<h4 id="_why_existing_principles_already_support_this">Why Existing Principles Already Support This</h4>
+<div class="paragraph">
+<p>Several principles from this pattern directly enable the security boundary:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p><strong>"No actor awareness in the orchestrator"</strong> — The orchestrator does not know that an AI is answering. It never sends secrets to stdin because it never needs to. The AI cannot request secrets because it can only <em>respond</em> to prompts — not initiate actions.</p>
+</li>
+<li>
+<p><strong>"Never exit temporarily"</strong> — The elevated process runs once, from start to finish. There is no window where the AI could intercept or restart the process with different parameters.</p>
+</li>
+<li>
+<p><strong>"Validate everything"</strong> — Even if the AI&#8217;s answer were malicious (e.g., attempting path traversal in a filename), the orchestrator validates before acting. The deterministic validation code is part of the privileged, auditable script.</p>
+</li>
+<li>
+<p><strong>"Minimize unpredictability"</strong> — Everything that touches secrets is in the deterministic part of the pipeline. The AI is only consulted for judgment calls that do not require credentials.</p>
+</li>
+</ul>
+</div>
+<div class="paragraph">
+<p>The result: <strong>the same architecture that makes workflows reproducible and testable also makes them secure by default.</strong></p>
+</div>
+</div>
+</div>
+</div>
+</div>
 <div class="sect1">
-<h2 id="disadvantages--trade-offs">Disadvantages &amp; Trade-offs</h2>
+<h2 id="_disadvantages_trade_offs">Disadvantages &amp; Trade-offs</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -585,7 +732,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <tbody>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>More upfront engineering</strong></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically. Further mitigated by AI-assisted workflow generation — see <em>From Pattern to Practice</em> below.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Rigid step ordering</strong></p></td>
@@ -597,71 +744,10 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Latency</strong></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by transparent caching — see <em>Transparent Caching</em> below.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by caching strategies — the orchestrator can skip <code>input()</code> entirely for previously answered prompts with identical call arguments.</p></td>
 </tr>
 </tbody>
 </table>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_transparent_caching">Transparent Caching</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The orchestrator can avoid repeated round-trips by caching responses on disk. The cache is <strong>transparent to the client</strong> — the client always answers via <code>input()</code> on stdin and never needs to know whether its response will be cached or has been served from cache.</p>
-</div>
-<div class="paragraph">
-<p>The mechanism is simple. The orchestrator assigns each <code>input()</code> call an <strong>input ID</strong> and derives a <strong>deterministic cache path</strong> from it — for example <code>cache/{input_id}/{call_hash}</code> with <code>call_hash = sha256(call_args)</code>. Before asking, it checks whether a cached response already exists at that path:</p>
-</div>
-<div class="ulist">
-<ul>
-<li>
-<p><strong>Cache hit:</strong> The file exists. The orchestrator reads the cached response and skips the <code>input()</code> entirely — no round-trip, no waiting.</p>
-</li>
-<li>
-<p><strong>Cache miss:</strong> The file does not exist. The orchestrator asks the client via <code>input()</code> as usual, receives the answer on stdin, writes it to the cache path, and then proceeds.</p>
-</li>
-</ul>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="img/caching.svg" alt="caching" width="630" height="1076">
-</div>
-</div>
-<div class="paragraph">
-<p>Same call arguments always produce the same hash, so the orchestrator can reduce an implicit "has this been answered before?" to a simple file-existence check.</p>
-</div>
-<div class="paragraph">
-<p>Not every step should be cached. The orchestrator designer decides per step:</p>
-</div>
-<table class="tableblock frame-all grid-all stretch">
-<colgroup>
-<col style="width: 36.3636%;">
-<col style="width: 9.0909%;">
-<col style="width: 54.5455%;">
-</colgroup>
-<thead>
-<tr>
-<th class="tableblock halign-left valign-top">Step type</th>
-<th class="tableblock halign-left valign-top">Cache?</th>
-<th class="tableblock halign-left valign-top">Why</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Credentials, confirmations, context-dependent choices</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">No</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">These are volatile by nature. If the answer were always the same, it would be a parameter — not a prompt.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Expensive creative output (summaries, generated files, translations)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Yes</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Deterministic for the same call arguments, expensive to reproduce. On cache hit the client is never even asked.</p></td>
-</tr>
-</tbody>
-</table>
-<div class="paragraph">
-<p><strong>Rule of thumb for orchestrator designers:</strong> Cache anything that took effort to produce and is determined by the call arguments. Never cache anything sensitive, volatile, or trivially short.</p>
-</div>
 </div>
 </div>
 <div class="sect1">
@@ -727,10 +813,212 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 </div>
 </div>
+<div class="sect1">
+<h2 id="_from_pattern_to_practice">From Pattern to Practice</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The orchestrator pattern is powerful, but writing one from scratch requires programming skills. This section explores how the barrier to entry can be lowered — allowing users who are not developers to create, review, and trust orchestrated workflows.</p>
+</div>
+<div class="sect2">
+<h3 id="_self_generating_workflows">Self-Generating Workflows</h3>
+<div class="paragraph">
+<p>The pattern described so far assumes that a developer writes the orchestrator. But the orchestrator itself can be <strong>generated by the AI</strong> — under the user&#8217;s supervision.</p>
+</div>
+<div class="sect3">
+<h4 id="_the_idea">The Idea</h4>
+<div class="paragraph">
+<p>A user describes a desired workflow in natural language: "I need a script that provisions a new customer environment — creates a database, generates API keys, configures DNS, and sends a welcome email." The AI then generates the complete stack:</p>
+</div>
+<div class="olist arabic">
+<ol class="arabic">
+<li>
+<p>The <strong>orchestrator script</strong> — the deterministic spine that drives the workflow</p>
+</li>
+<li>
+<p>The <strong>sub-scripts</strong> — for each deterministic step (database creation, DNS configuration, etc.)</p>
+</li>
+<li>
+<p>A <strong>setuid wrapper or sudo rule</strong> — so the orchestrator can access credentials without exposing them to the AI</p>
+</li>
+<li>
+<p>A <strong>Gherkin test suite</strong> — a human-readable specification that the user can review</p>
+</li>
+</ol>
+</div>
+<div class="paragraph">
+<p>The AI compiles the wrapper, runs the tests, and presents the result. The user only needs to <em>read and approve</em> — not write code.</p>
+</div>
+</div>
+<div class="sect3">
+<h4 id="_gherkin_as_reviewable_specification">Gherkin as Reviewable Specification</h4>
+<div class="paragraph">
+<p>This is where the approach becomes powerful for non-developers. Raw Python or Shell code is difficult to review, especially when it runs with elevated privileges. But Gherkin (used by Cucumber, Behave, and similar frameworks) is natural language with minimal structure:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-gherkin" data-lang="gherkin">Feature: Customer provisioning workflow handles secrets securely
+
+  Scenario: Orchestrator reads database password from vault
+    Given the orchestrator runs as user "deploy_svc"
+    And the vault contains credentials for "customer-db"
+    When the orchestrator reaches the database provisioning step
+    Then the password is read from the vault
+    And the password is never written to stdout
+    And the password is never visible to the AI agent
+
+  Scenario: AI agent cannot access secrets directly
+    Given the AI agent runs as user "copilot_user"
+    When the AI agent attempts to read "/secure/vault.yml"
+    Then access is denied with a permission error
+
+  Scenario: Workflow creates database with correct parameters
+    Given a new customer "Acme Corp" with plan "enterprise"
+    When the provisioning workflow completes
+    Then a database "acme_corp" exists
+    And the database user has only INSERT, SELECT, UPDATE permissions
+    And no DELETE or DROP permissions are granted</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The user reads this and confirms: "Yes, that is what I want." The AI generates the step definitions (the executable glue code) behind the scenes. The user does not need to understand the step definitions — only the Gherkin scenarios.</p>
+</div>
+</div>
+<div class="sect3">
+<h4 id="_the_three_level_trust_chain">The Three-Level Trust Chain</h4>
+<div class="paragraph">
+<p>This creates a layered review process where the user can stop at whichever level matches their expertise:</p>
+</div>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 25%;">
+<col style="width: 50%;">
+<col style="width: 25%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Level</th>
+<th class="tableblock halign-left valign-top">What the user reviews</th>
+<th class="tableblock halign-left valign-top">Difficulty</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>1. Gherkin specs</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">"Does the workflow do what I described?"</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Easy — natural language</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>2. Test results</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">"Do all tests pass?"</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Trivial — green/red</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>3. Source code</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">"Is the implementation correct?"</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Hard — but optional if level 1 and 2 are thorough</p></td>
+</tr>
+</tbody>
+</table>
+<div class="paragraph">
+<p>For most users, levels 1 and 2 are sufficient. Level 3 is for developers or security auditors who want full assurance.</p>
+</div>
+</div>
+<div class="sect3">
+<h4 id="_the_systematic_bias_risk">The Systematic Bias Risk</h4>
+<div class="paragraph">
+<p>There is an important caveat: <strong>the AI generates both the code and the tests.</strong> This is analogous to a developer who writes their own unit tests — if the developer misunderstands the requirement, the tests may encode the same misunderstanding, and both will be internally consistent but wrong.</p>
+</div>
+<div class="paragraph">
+<p>For example, if the user says "the password must never be logged" and the AI interprets "logged" as "written to a log file" but not "printed to stderr", then both the code and the Gherkin scenario will consistently miss the stderr case. The tests pass. The spec looks correct. But the actual behavior has a gap.</p>
+</div>
+<div class="paragraph">
+<p>This is not a theoretical concern. It is the <strong>same risk that exists whenever one person writes both implementation and tests</strong> — familiar from software engineering, and solvable with the same mitigation: <strong>independent review</strong>.</p>
+</div>
+</div>
+<div class="sect3">
+<h4 id="_mitigation_independent_verification">Mitigation: Independent Verification</h4>
+<div class="paragraph">
+<p>The mitigation is straightforward — have the specification reviewed by a party that was <strong>not involved in generating the code</strong>:</p>
+</div>
+<div class="paragraph">
+<p><strong>Level 1 — New session (sufficient for most cases):</strong></p>
+</div>
+<div class="paragraph">
+<p>Start a fresh AI session with no shared context from the code generation session. Provide only the user&#8217;s original requirement and the generated Gherkin specs. Ask: "Do these scenarios fully cover the stated requirement? What is missing?"</p>
+</div>
+<div class="paragraph">
+<p>A new session works because systematic errors arise primarily from <strong>shared conversational context</strong> — the AI made an interpretation early in the code generation session that then influenced everything downstream. A fresh session interprets the Gherkin specs independently, without that context.</p>
+</div>
+<div class="paragraph">
+<p><strong>Level 2 — Different model (for high-assurance scenarios):</strong></p>
+</div>
+<div class="paragraph">
+<p>Use a different AI model for the review. This adds <strong>architectural diversity</strong> — different models have different training biases and different blind spots. If both models agree the specs are complete, confidence increases significantly.</p>
+</div>
+<div class="paragraph">
+<p>This level is appropriate when:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p>The workflow has access to production systems or sensitive data</p>
+</li>
+<li>
+<p>Regulatory requirements demand separation of concerns (analogous to the four-eyes principle)</p>
+</li>
+<li>
+<p>The organization&#8217;s risk profile warrants the additional effort</p>
+</li>
+</ul>
+</div>
+<div class="paragraph">
+<p><strong>Level 3 — Human expert review (for security-critical workflows):</strong></p>
+</div>
+<div class="paragraph">
+<p>For workflows that manage credentials, handle financial transactions, or operate critical infrastructure, a human security review of the Gherkin specs (and optionally the code) remains the gold standard. The Gherkin format makes this review significantly easier than reviewing raw code.</p>
+</div>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 20%;">
+<col style="width: 40%;">
+<col style="width: 40%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Level</th>
+<th class="tableblock halign-left valign-top">Reviewer</th>
+<th class="tableblock halign-left valign-top">When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>New session</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Same model, fresh context</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Default for all generated workflows</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Different model</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Different AI model</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Production access, sensitive data, regulatory requirements</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Human expert</strong></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Security engineer or domain expert</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Critical infrastructure, financial systems, compliance</p></td>
+</tr>
+</tbody>
+</table>
+<div class="paragraph">
+<p>These levels are <strong>cumulative</strong> — for a high-assurance workflow, you might use all three. For a routine data-processing pipeline, level 1 is typically sufficient.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-03-29 23:21:39 +0200
+Last updated 2026-03-30 00:57:57 +0200
 </div>
 </div>
 </body>

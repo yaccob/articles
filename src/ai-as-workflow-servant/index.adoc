@@ -1,6 +1,7 @@
 = AI as Workflow Servant +
 How Deterministic Scripts Tame AI Unpredictability
 :doctype: book
+:toc: left
 
 _A pattern for repeatable workflows where a deterministic script drives the process — asking only what it cannot determine itself._
 
@@ -157,87 +158,79 @@ end note
 |*Transparent flow* |Every prompt and every response passes through the terminal. Nothing happens "magically" behind the scenes.
 |*Actor-agnostic* |The orchestrator works with any respondent: a human typing answers, an AI agent, or a test harness replaying recorded responses. No vendor lock-in.
 |*Recoverable* |If an answer causes a validation error or runtime failure, the orchestrator can re-ask. The evaluation of "correct" or "incorrect" is itself deterministic — defined by the script, not by judgment.
+|*Narrow information boundary* |The respondent only sees what the orchestrator explicitly includes in its `input()` prompts — never the full workflow state, file system, environment variables, or API responses. This inherent need-to-know boundary makes the pattern amenable to privilege separation — see _Security by Architecture_ below.
 |===
 
-[[disadvantages--trade-offs]]
+=== Security by Architecture
+
+The pattern described in this article creates a natural *privilege separation* — not by accident, but by design. Because the orchestrator is a standalone CLI program that communicates with its respondent exclusively via `input()` on stdin, the respondent — whether human or AI — *never needs access to secrets, credentials, or elevated permissions*.
+
+==== The Privilege Boundary
+
+Consider a workflow that deploys to production, reads database credentials, or accesses an internal API with a service account. In a typical AI-assisted approach, the AI agent would need those credentials itself — they would appear in its context window, its logs, or its environment. This is a security liability.
+
+With the orchestrator pattern, the architecture looks different:
+
+[cols="1,1,1",options="header"]
+|===
+|Layer |Runs as |Knows secrets?
+|*AI agent* |Unprivileged user |No — only sees the orchestrator's `input()` prompts and provides answers on stdin
+|*Orchestrator* |Privileged user (via `sudo` or setuid wrapper) |Yes — reads credentials from keychain, vault, or protected files
+|*Sub-scripts* |Inherit orchestrator's privileges |Yes — use secrets for API calls, DB access, etc.
+|===
+
+The AI is confined to the *creative, unprivileged* side of the boundary. Secrets flow within the deterministic, scripted pipeline — never across the stdin/stdout interface where the AI sits.
+
+==== Enforcing the Boundary on Unix Systems
+
+On Linux and macOS, the orchestrator can run with elevated privileges using two mechanisms:
+
+*Option 1: `sudo` with a dedicated rule* (recommended for most cases):
+
+----
+# /etc/sudoers.d/workflow
+copilot_user ALL=(deploy_svc) NOPASSWD: /opt/workflows/orchestrate.py
+----
+
+The AI agent runs as `copilot_user` and invokes the orchestrator via `sudo -u deploy_svc`. The orchestrator runs as `deploy_svc`, which owns the credentials. Simple, auditable, no compilation needed.
+
+*Option 2: setuid wrapper* (for environments where sudo configuration is impractical):
+
+[source,c]
+----
+// wrapper.c — compiled, owned by deploy_svc, chmod u+s
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+    execv("/opt/workflows/orchestrate.py", argv);
+    return 1;
+}
+----
+
+The wrapper runs as `deploy_svc` regardless of who invokes it. The orchestrator inherits those privileges. The AI agent — answering on stdin — remains unprivileged.
+
+NOTE: The setuid bit is ignored for interpreted scripts (shebang files) on both Linux and macOS. A compiled wrapper is required when using this approach.
+
+==== Why Existing Principles Already Support This
+
+Several principles from this pattern directly enable the security boundary:
+
+* *"No actor awareness in the orchestrator"* — The orchestrator does not know that an AI is answering. It never sends secrets to stdin because it never needs to. The AI cannot request secrets because it can only _respond_ to prompts — not initiate actions.
+* *"Never exit temporarily"* — The elevated process runs once, from start to finish. There is no window where the AI could intercept or restart the process with different parameters.
+* *"Validate everything"* — Even if the AI's answer were malicious (e.g., attempting path traversal in a filename), the orchestrator validates before acting. The deterministic validation code is part of the privileged, auditable script.
+* *"Minimize unpredictability"* — Everything that touches secrets is in the deterministic part of the pipeline. The AI is only consulted for judgment calls that do not require credentials.
+
+The result: *the same architecture that makes workflows reproducible and testable also makes them secure by default.*
+
 == Disadvantages & Trade-offs
 
 [cols="1,2",options="header",]
 |===
 |Disadvantage |Mitigation
-|*More upfront engineering* |Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically.
+|*More upfront engineering* |Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically. Further mitigated by AI-assisted workflow generation — see _From Pattern to Practice_ below.
 |*Rigid step ordering* |The orchestrator defines a fixed pipeline. If the workflow fundamentally changes, the script must be updated. Partially mitigated by making steps idempotent and skippable.
 |*Prompt quality matters* |The orchestrator's `input()` prompts must be clear and self-contained so that any respondent — human or AI — can answer without additional context.
-|*Latency* |Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by transparent caching — see _Transparent Caching_ below.
+|*Latency* |Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by caching strategies — the orchestrator can skip `input()` entirely for previously answered prompts with identical call arguments.
 |===
-
-== Transparent Caching
-
-The orchestrator can avoid repeated round-trips by caching responses on disk. The cache is *transparent to the client* — the client always answers via `input()` on stdin and never needs to know whether its response will be cached or has been served from cache.
-
-The mechanism is simple. The orchestrator assigns each `input()` call an *input ID* and derives a *deterministic cache path* from it — for example `cache/++{++input++_++id}/++{++call++_++hash}` with `call++_++hash = sha256(call++_++args)`. Before asking, it checks whether a cached response already exists at that path:
-
-* *Cache hit:* The file exists. The orchestrator reads the cached response and skips the `input()` entirely — no round-trip, no waiting.
-* *Cache miss:* The file does not exist. The orchestrator asks the client via `input()` as usual, receives the answer on stdin, writes it to the cache path, and then proceeds.
-
-[plantuml,caching,svg]
-----
-@startuml
-!theme plain
-skinparam backgroundColor #FEFEFE
-skinparam sequenceMessageAlign center
-skinparam responseMessageBelowArrow true
-skinparam maxMessageSize 220
-skinparam sequenceParticipantPadding 30
-skinparam sequenceGroupBorderColor #888888
-skinparam sequenceGroupBodyBackgroundColor transparent
-skinparam noteBorderColor #888888
-skinparam noteBackgroundColor #FFFFDD
-title \nTransparent Caching\n(Cache Hit vs. Cache Miss)
-
-actor "Client\n(human or AI)" as R
-participant "Orchestrator" as O #LightGoldenRodYellow
-participant "File System" as FS #LightGray
-
-== Trigger ==
-
-R -> O : orchestrate -​-source data.xml -​-lang EN
-O -> O : call_hash = sha256("lang=EN,source=data.xml")
-
-== input_1 — Cache Hit ==
-
-O -> FS : exists cache/input_1/{call_hash}?
-FS --> O : **yes**
-O -> FS : read cache/input_1/{call_hash}
-FS --> O : cached response
-O -> O : use response
-note right of O : No round-trip.\nNo waiting.
-
-== input_2 — Cache Miss ==
-
-O -> FS : exists cache/input_2/{call_hash}?
-FS --> O : **no**
-O -> R : "Please generate a\nsummary for {task}"
-R --> O : answer on stdin
-O -> FS : write to cache/input_2/{call_hash}
-O -> O : use response
-note right of O : Next run with same\ncall arguments → cache hit.
-@enduml
-----
-
-
-Same call arguments always produce the same hash, so the orchestrator can reduce an implicit "has this been answered before?" to a simple file-existence check.
-
-Not every step should be cached. The orchestrator designer decides per step:
-
-[cols="4,1,6",options="header",]
-|===
-|Step type |Cache? |Why
-|Credentials, confirmations, context-dependent choices |No |These are volatile by nature. If the answer were always the same, it would be a parameter — not a prompt.
-|Expensive creative output (summaries, generated files, translations) |Yes |Deterministic for the same call arguments, expensive to reproduce. On cache hit the client is never even asked.
-|===
-
-*Rule of thumb for orchestrator designers:* Cache anything that took effort to produce and is determined by the call arguments. Never cache anything sensitive, volatile, or trivially short.
 
 == When to Use This Pattern
 
@@ -260,3 +253,110 @@ Not every step should be cached. The orchestrator designer decides per step:
 . *Minimize unpredictability.* Script everything that can be scripted. Only delegate to a respondent what genuinely requires judgment.
 . *Never exit temporarily.* The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits.
 . *Validate everything.* After receiving an answer, the orchestrator checks it before proceeding. Trust no one — not the human, not the AI.
+
+== From Pattern to Practice
+
+The orchestrator pattern is powerful, but writing one from scratch requires programming skills. This section explores how the barrier to entry can be lowered — allowing users who are not developers to create, review, and trust orchestrated workflows.
+
+=== Self-Generating Workflows
+
+The pattern described so far assumes that a developer writes the orchestrator. But the orchestrator itself can be *generated by the AI* — under the user's supervision.
+
+==== The Idea
+
+A user describes a desired workflow in natural language: "I need a script that provisions a new customer environment — creates a database, generates API keys, configures DNS, and sends a welcome email." The AI then generates the complete stack:
+
+[arabic]
+. The *orchestrator script* — the deterministic spine that drives the workflow
+. The *sub-scripts* — for each deterministic step (database creation, DNS configuration, etc.)
+. A *setuid wrapper or sudo rule* — so the orchestrator can access credentials without exposing them to the AI
+. A *Gherkin test suite* — a human-readable specification that the user can review
+
+The AI compiles the wrapper, runs the tests, and presents the result. The user only needs to _read and approve_ — not write code.
+
+==== Gherkin as Reviewable Specification
+
+This is where the approach becomes powerful for non-developers. Raw Python or Shell code is difficult to review, especially when it runs with elevated privileges. But Gherkin (used by Cucumber, Behave, and similar frameworks) is natural language with minimal structure:
+
+[source,gherkin]
+----
+Feature: Customer provisioning workflow handles secrets securely
+
+  Scenario: Orchestrator reads database password from vault
+    Given the orchestrator runs as user "deploy_svc"
+    And the vault contains credentials for "customer-db"
+    When the orchestrator reaches the database provisioning step
+    Then the password is read from the vault
+    And the password is never written to stdout
+    And the password is never visible to the AI agent
+
+  Scenario: AI agent cannot access secrets directly
+    Given the AI agent runs as user "copilot_user"
+    When the AI agent attempts to read "/secure/vault.yml"
+    Then access is denied with a permission error
+
+  Scenario: Workflow creates database with correct parameters
+    Given a new customer "Acme Corp" with plan "enterprise"
+    When the provisioning workflow completes
+    Then a database "acme_corp" exists
+    And the database user has only INSERT, SELECT, UPDATE permissions
+    And no DELETE or DROP permissions are granted
+----
+
+The user reads this and confirms: "Yes, that is what I want." The AI generates the step definitions (the executable glue code) behind the scenes. The user does not need to understand the step definitions — only the Gherkin scenarios.
+
+==== The Three-Level Trust Chain
+
+This creates a layered review process where the user can stop at whichever level matches their expertise:
+
+[cols="1,2,1",options="header"]
+|===
+|Level |What the user reviews |Difficulty
+|*1. Gherkin specs* |"Does the workflow do what I described?" |Easy — natural language
+|*2. Test results* |"Do all tests pass?" |Trivial — green/red
+|*3. Source code* |"Is the implementation correct?" |Hard — but optional if level 1 and 2 are thorough
+|===
+
+For most users, levels 1 and 2 are sufficient. Level 3 is for developers or security auditors who want full assurance.
+
+==== The Systematic Bias Risk
+
+There is an important caveat: *the AI generates both the code and the tests.* This is analogous to a developer who writes their own unit tests — if the developer misunderstands the requirement, the tests may encode the same misunderstanding, and both will be internally consistent but wrong.
+
+For example, if the user says "the password must never be logged" and the AI interprets "logged" as "written to a log file" but not "printed to stderr", then both the code and the Gherkin scenario will consistently miss the stderr case. The tests pass. The spec looks correct. But the actual behavior has a gap.
+
+This is not a theoretical concern. It is the *same risk that exists whenever one person writes both implementation and tests* — familiar from software engineering, and solvable with the same mitigation: *independent review*.
+
+==== Mitigation: Independent Verification
+
+The mitigation is straightforward — have the specification reviewed by a party that was *not involved in generating the code*:
+
+*Level 1 — New session (sufficient for most cases):*
+
+Start a fresh AI session with no shared context from the code generation session. Provide only the user's original requirement and the generated Gherkin specs. Ask: "Do these scenarios fully cover the stated requirement? What is missing?"
+
+A new session works because systematic errors arise primarily from *shared conversational context* — the AI made an interpretation early in the code generation session that then influenced everything downstream. A fresh session interprets the Gherkin specs independently, without that context.
+
+*Level 2 — Different model (for high-assurance scenarios):*
+
+Use a different AI model for the review. This adds *architectural diversity* — different models have different training biases and different blind spots. If both models agree the specs are complete, confidence increases significantly.
+
+This level is appropriate when:
+
+* The workflow has access to production systems or sensitive data
+* Regulatory requirements demand separation of concerns (analogous to the four-eyes principle)
+* The organization's risk profile warrants the additional effort
+
+*Level 3 — Human expert review (for security-critical workflows):*
+
+For workflows that manage credentials, handle financial transactions, or operate critical infrastructure, a human security review of the Gherkin specs (and optionally the code) remains the gold standard. The Gherkin format makes this review significantly easier than reviewing raw code.
+
+[cols="1,2,2",options="header"]
+|===
+|Level |Reviewer |When to use
+|*New session* |Same model, fresh context |Default for all generated workflows
+|*Different model* |Different AI model |Production access, sensitive data, regulatory requirements
+|*Human expert* |Security engineer or domain expert |Critical infrastructure, financial systems, compliance
+|===
+
+These levels are *cumulative* — for a high-assurance workflow, you might use all three. For a routine data-processing pipeline, level 1 is typically sufficient.
