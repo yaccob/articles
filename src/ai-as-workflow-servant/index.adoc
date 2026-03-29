@@ -228,7 +228,7 @@ The result: *the same architecture that makes workflows reproducible and testabl
 |Disadvantage |Mitigation
 |*More upfront engineering* |Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically. Further mitigated by AI-assisted workflow generation — see _From Pattern to Practice_ below.
 |*Rigid step ordering* |The orchestrator defines a fixed pipeline. If the workflow fundamentally changes, the script must be updated. Partially mitigated by making steps idempotent and skippable.
-|*Prompt quality matters* |The orchestrator's `input()` prompts must be clear and self-contained so that any respondent — human or AI — can answer without additional context.
+|*Prompt quality matters* |The orchestrator's `input()` prompts must be *self-contained* — each prompt must provide enough context for any respondent to answer without prior knowledge of the workflow state. This is not merely a nice-to-have; it is the *enabling constraint* that makes actor-agnosticism work. A prompt that assumes the respondent has been following along will fail for a fresh AI session or a human operator who just joined. A prompt that includes all relevant context works for anyone. Good prompt design benefits human and AI respondents equally.
 |*Latency* |Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by caching strategies — the orchestrator can skip `input()` entirely for previously answered prompts with identical call arguments.
 |===
 
@@ -251,8 +251,49 @@ The result: *the same architecture that makes workflows reproducible and testabl
 . *The orchestrator holds the scepter.* Human and AI are respondents who only act when asked.
 . *No actor awareness in the orchestrator.* It does not know or care whether a human or AI is answering. All communication is via `input()` and `print()`.
 . *Minimize unpredictability.* Script everything that can be scripted. Only delegate to a respondent what genuinely requires judgment.
-. *Never exit temporarily.* The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits.
+. *Never exit temporarily.* The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits. If a response is invalid, the orchestrator re-prompts — it does not abort and expect to be restarted with different parameters. This counters a common anti-pattern in AI-generated scripts: exiting on the first unexpected input, assuming the caller (the AI) will retry with corrected arguments. A well-designed interactive program recovers by asking again, not by crashing.
 . *Validate everything.* After receiving an answer, the orchestrator checks it before proceeding. Trust no one — not the human, not the AI.
+
+== Related Work & Positioning
+
+The idea of combining deterministic code with AI capabilities is not new. Several influential publications and frameworks address overlapping concerns — but from different angles.
+
+=== Anthropic: "Building Effective Agents" (December 2024)
+
+Anthropic's widely-cited blog post footnote:[Anthropic, _Building effective agents_, December 2024. https://www.anthropic.com/research/building-effective-agents] draws a clear architectural distinction between *workflows* ("systems where LLMs and tools are orchestrated through predefined code paths") and *agents* ("systems where LLMs dynamically direct their own processes and tool usage"). The post catalogs five workflow patterns — prompt chaining, routing, parallelization, orchestrator-workers, and evaluator-optimizer — all of which assume that the orchestrating code _knows it is calling an LLM_ and uses model-specific APIs.
+
+The pattern described in this article aligns most closely with Anthropic's "workflow" category, but differs in one fundamental respect: *the orchestrator has no knowledge of AI at all.* It communicates via `input()` and `print()` — not via LLM APIs, tool-use protocols, or agent frameworks. This makes it testable with plain stdin, framework-free, and usable without AI entirely. Where Anthropic's workflows are LLM-centric (the code is designed _around_ the model), this pattern is actor-agnostic (the code is designed around the _task_).
+
+Anthropic's advice to "start with the simplest solution possible" and avoid unnecessary complexity resonates strongly with this pattern's philosophy.
+
+=== LangChain, LangGraph, and Similar Frameworks
+
+Frameworks like LangChain and LangGraph provide abstractions for composing LLM calls into workflows — chains, state machines, routing logic, and tool integration. They are powerful for building LLM-powered applications, but they introduce _framework dependency_ and assume the LLM is a first-class component wired into the code.
+
+This pattern requires no SDK, no API client, and no framework. The orchestrator is a plain CLI program that could have been written in 2005. The AI (if present) sits on the other side of stdin — not inside the code. This means zero vendor lock-in, no dependency on model availability, and trivial testability.
+
+The trade-off is flexibility: LangChain-style frameworks offer richer integration with model capabilities (tool use, structured output, streaming). This pattern deliberately sacrifices that richness for simplicity and independence.
+
+=== Multi-Agent Frameworks (CrewAI, AutoGen)
+
+Multi-agent frameworks like CrewAI and Microsoft's AutoGen let multiple AI agents collaborate — each with a role, tools, and a shared communication protocol. The agents _are_ the orchestrators: they decide what to do, delegate to each other, and synthesize results.
+
+This pattern takes the opposite approach. There is exactly *one* orchestrator, and it is deterministic code — not an AI agent. AI is not a peer; it is a respondent who answers when asked. This is a deliberate architectural choice for workflows where predictability, auditability, and reproducibility outweigh the need for dynamic adaptation.
+
+=== Unix Philosophy and the `llm` CLI
+
+Simon Willison's `llm` command-line tool footnote:[Simon Willison, _llm_ CLI tool. https://llm.datasette.io/] brings LLM capabilities into the Unix pipeline: pipe text in, get AI-generated text out. It embodies the Unix philosophy of small, composable tools — and shares this pattern's preference for stdin/stdout as the integration boundary.
+
+The difference is scope: `llm` is a single-invocation tool (one prompt, one response). This pattern describes _multi-step interactive orchestration_ where the script maintains state across many prompts, validates intermediate results, and controls the overall flow. The `llm` tool could serve as one building block _within_ an orchestrator, but it does not address the orchestration problem itself.
+
+=== What This Pattern Adds
+
+The contribution of this pattern is not a new technology but a *specific architectural stance*: the orchestrator must be a plain, actor-agnostic CLI program that communicates exclusively via stdin/stdout, with no knowledge of AI. This stance has consequences that existing approaches do not fully address:
+
+* *Complete actor-agnosticism* — not just "you can swap models" (as in LangChain), but "the orchestrator does not know AI exists."
+* *Testability without infrastructure* — pipe recorded answers to stdin. No API keys, no model endpoints, no framework setup.
+* *Natural privilege separation* — the stdin/stdout boundary becomes a security boundary (see _Security by Architecture_ above).
+* *Bidirectional applicability* — the same orchestrator works for human operators, AI agents, and automated test harnesses without modification.
 
 == From Pattern to Practice
 

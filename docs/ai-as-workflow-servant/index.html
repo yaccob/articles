@@ -457,6 +457,15 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_when_to_use_this_pattern">When to Use This Pattern</a></li>
 <li><a href="#_when_not_to_use_it">When NOT to Use It</a></li>
 <li><a href="#_key_principles">Key Principles</a></li>
+<li><a href="#_related_work_positioning">Related Work &amp; Positioning</a>
+<ul class="sectlevel2">
+<li><a href="#_anthropic_building_effective_agents_december_2024">Anthropic: "Building Effective Agents" (December 2024)</a></li>
+<li><a href="#_langchain_langgraph_and_similar_frameworks">LangChain, LangGraph, and Similar Frameworks</a></li>
+<li><a href="#_multi_agent_frameworks_crewai_autogen">Multi-Agent Frameworks (CrewAI, AutoGen)</a></li>
+<li><a href="#_unix_philosophy_and_the_llm_cli">Unix Philosophy and the <code>llm</code> CLI</a></li>
+<li><a href="#_what_this_pattern_adds">What This Pattern Adds</a></li>
+</ul>
+</li>
 <li><a href="#_from_pattern_to_practice">From Pattern to Practice</a>
 <ul class="sectlevel2">
 <li><a href="#_self_generating_workflows">Self-Generating Workflows</a></li>
@@ -740,7 +749,7 @@ The setuid bit is ignored for interpreted scripts (shebang files) on both Linux 
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Prompt quality matters</strong></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The orchestrator&#8217;s <code>input()</code> prompts must be clear and self-contained so that any respondent — human or AI — can answer without additional context.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The orchestrator&#8217;s <code>input()</code> prompts must be <strong>self-contained</strong> — each prompt must provide enough context for any respondent to answer without prior knowledge of the workflow state. This is not merely a nice-to-have; it is the <strong>enabling constraint</strong> that makes actor-agnosticism work. A prompt that assumes the respondent has been following along will fail for a fresh AI session or a human operator who just joined. A prompt that includes all relevant context works for anyone. Good prompt design benefits human and AI respondents equally.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><strong>Latency</strong></p></td>
@@ -804,12 +813,84 @@ The setuid bit is ignored for interpreted scripts (shebang files) on both Linux 
 <p><strong>Minimize unpredictability.</strong> Script everything that can be scripted. Only delegate to a respondent what genuinely requires judgment.</p>
 </li>
 <li>
-<p><strong>Never exit temporarily.</strong> The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits.</p>
+<p><strong>Never exit temporarily.</strong> The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits. If a response is invalid, the orchestrator re-prompts — it does not abort and expect to be restarted with different parameters. This counters a common anti-pattern in AI-generated scripts: exiting on the first unexpected input, assuming the caller (the AI) will retry with corrected arguments. A well-designed interactive program recovers by asking again, not by crashing.</p>
 </li>
 <li>
 <p><strong>Validate everything.</strong> After receiving an answer, the orchestrator checks it before proceeding. Trust no one — not the human, not the AI.</p>
 </li>
 </ol>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_related_work_positioning">Related Work &amp; Positioning</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The idea of combining deterministic code with AI capabilities is not new. Several influential publications and frameworks address overlapping concerns — but from different angles.</p>
+</div>
+<div class="sect2">
+<h3 id="_anthropic_building_effective_agents_december_2024">Anthropic: "Building Effective Agents" (December 2024)</h3>
+<div class="paragraph">
+<p>Anthropic&#8217;s widely-cited blog post <sup class="footnote">[<a id="_footnoteref_1" class="footnote" href="#_footnotedef_1" title="View footnote.">1</a>]</sup> draws a clear architectural distinction between <strong>workflows</strong> ("systems where LLMs and tools are orchestrated through predefined code paths") and <strong>agents</strong> ("systems where LLMs dynamically direct their own processes and tool usage"). The post catalogs five workflow patterns — prompt chaining, routing, parallelization, orchestrator-workers, and evaluator-optimizer — all of which assume that the orchestrating code <em>knows it is calling an LLM</em> and uses model-specific APIs.</p>
+</div>
+<div class="paragraph">
+<p>The pattern described in this article aligns most closely with Anthropic&#8217;s "workflow" category, but differs in one fundamental respect: <strong>the orchestrator has no knowledge of AI at all.</strong> It communicates via <code>input()</code> and <code>print()</code> — not via LLM APIs, tool-use protocols, or agent frameworks. This makes it testable with plain stdin, framework-free, and usable without AI entirely. Where Anthropic&#8217;s workflows are LLM-centric (the code is designed <em>around</em> the model), this pattern is actor-agnostic (the code is designed around the <em>task</em>).</p>
+</div>
+<div class="paragraph">
+<p>Anthropic&#8217;s advice to "start with the simplest solution possible" and avoid unnecessary complexity resonates strongly with this pattern&#8217;s philosophy.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_langchain_langgraph_and_similar_frameworks">LangChain, LangGraph, and Similar Frameworks</h3>
+<div class="paragraph">
+<p>Frameworks like LangChain and LangGraph provide abstractions for composing LLM calls into workflows — chains, state machines, routing logic, and tool integration. They are powerful for building LLM-powered applications, but they introduce <em>framework dependency</em> and assume the LLM is a first-class component wired into the code.</p>
+</div>
+<div class="paragraph">
+<p>This pattern requires no SDK, no API client, and no framework. The orchestrator is a plain CLI program that could have been written in 2005. The AI (if present) sits on the other side of stdin — not inside the code. This means zero vendor lock-in, no dependency on model availability, and trivial testability.</p>
+</div>
+<div class="paragraph">
+<p>The trade-off is flexibility: LangChain-style frameworks offer richer integration with model capabilities (tool use, structured output, streaming). This pattern deliberately sacrifices that richness for simplicity and independence.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_multi_agent_frameworks_crewai_autogen">Multi-Agent Frameworks (CrewAI, AutoGen)</h3>
+<div class="paragraph">
+<p>Multi-agent frameworks like CrewAI and Microsoft&#8217;s AutoGen let multiple AI agents collaborate — each with a role, tools, and a shared communication protocol. The agents <em>are</em> the orchestrators: they decide what to do, delegate to each other, and synthesize results.</p>
+</div>
+<div class="paragraph">
+<p>This pattern takes the opposite approach. There is exactly <strong>one</strong> orchestrator, and it is deterministic code — not an AI agent. AI is not a peer; it is a respondent who answers when asked. This is a deliberate architectural choice for workflows where predictability, auditability, and reproducibility outweigh the need for dynamic adaptation.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_unix_philosophy_and_the_llm_cli">Unix Philosophy and the <code>llm</code> CLI</h3>
+<div class="paragraph">
+<p>Simon Willison&#8217;s <code>llm</code> command-line tool <sup class="footnote">[<a id="_footnoteref_2" class="footnote" href="#_footnotedef_2" title="View footnote.">2</a>]</sup> brings LLM capabilities into the Unix pipeline: pipe text in, get AI-generated text out. It embodies the Unix philosophy of small, composable tools — and shares this pattern&#8217;s preference for stdin/stdout as the integration boundary.</p>
+</div>
+<div class="paragraph">
+<p>The difference is scope: <code>llm</code> is a single-invocation tool (one prompt, one response). This pattern describes <em>multi-step interactive orchestration</em> where the script maintains state across many prompts, validates intermediate results, and controls the overall flow. The <code>llm</code> tool could serve as one building block <em>within</em> an orchestrator, but it does not address the orchestration problem itself.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_what_this_pattern_adds">What This Pattern Adds</h3>
+<div class="paragraph">
+<p>The contribution of this pattern is not a new technology but a <strong>specific architectural stance</strong>: the orchestrator must be a plain, actor-agnostic CLI program that communicates exclusively via stdin/stdout, with no knowledge of AI. This stance has consequences that existing approaches do not fully address:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p><strong>Complete actor-agnosticism</strong> — not just "you can swap models" (as in LangChain), but "the orchestrator does not know AI exists."</p>
+</li>
+<li>
+<p><strong>Testability without infrastructure</strong> — pipe recorded answers to stdin. No API keys, no model endpoints, no framework setup.</p>
+</li>
+<li>
+<p><strong>Natural privilege separation</strong> — the stdin/stdout boundary becomes a security boundary (see <em>Security by Architecture</em> above).</p>
+</li>
+<li>
+<p><strong>Bidirectional applicability</strong> — the same orchestrator works for human operators, AI agents, and automated test harnesses without modification.</p>
+</li>
+</ul>
+</div>
 </div>
 </div>
 </div>
@@ -1016,9 +1097,18 @@ The setuid bit is ignored for interpreted scripts (shebang files) on both Linux 
 </div>
 </div>
 </div>
+<div id="footnotes">
+<hr>
+<div class="footnote" id="_footnotedef_1">
+<a href="#_footnoteref_1">1</a>. Anthropic, <em>Building effective agents</em>, December 2024. <a href="https://www.anthropic.com/research/building-effective-agents" class="bare">https://www.anthropic.com/research/building-effective-agents</a>
+</div>
+<div class="footnote" id="_footnotedef_2">
+<a href="#_footnoteref_2">2</a>. Simon Willison, <em>llm</em> CLI tool. <a href="https://llm.datasette.io/" class="bare">https://llm.datasette.io/</a>
+</div>
+</div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-03-30 00:57:57 +0200
+Last updated 2026-03-30 01:23:19 +0200
 </div>
 </div>
 </body>
