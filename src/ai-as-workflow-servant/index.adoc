@@ -1,0 +1,262 @@
+= AI as Workflow Servant +
+How Deterministic Scripts Tame AI Unpredictability
+:doctype: book
+
+_A pattern for repeatable workflows where a deterministic script drives the process — asking only what it cannot determine itself._
+
+== The Problem
+
+Modern software workflows often involve two kinds of unpredictable actors: *humans* and *AI agents*. Both are creative, context-aware, and capable of judgment — but neither is deterministic. Ask a human to name ten files and you get ten different naming conventions. Ask an AI the same question twice and you may get two different answers.
+
+For repeatable, multi-step workflows — like processing survey data into reports, transforming configuration files across environments, or assembling release notes from commit history — this unpredictability is a liability. Steps get skipped, outputs vary, and debugging becomes archaeology.
+
+At the same time, some steps genuinely benefit from creative intelligence: generating human-readable summaries, choosing sensible defaults for ambiguous inputs, or deciding how to handle unexpected edge cases. A purely scripted pipeline would be rigid and require constant manual updates for these tasks.
+
+== The Insight: AI and Humans Are Equally Unpredictable
+
+It is tempting to treat AI as a fundamentally different kind of tool — something magical that "just knows" what to do. But from a workflow perspective, *an AI agent behaves much like an alternative user*: it reads prompts, makes decisions, and produces output. It is often faster and sometimes more consistent than a human, but it is subject to the same fundamental limitation: _you cannot guarantee what it will do._
+
+This suggests a design principle: *treat AI as you would treat a human operator.* Give it clear instructions, validate its output, and never let it drive the overall process. The same script that asks a human "What should this be called?" can ask an AI the same question — and the script does not need to know or care which one answered.
+
+The goal is to *reduce unpredictability to the minimum that is genuinely unavoidable*: the creative decisions that require judgment. Everything else — sequencing, file handling, API calls, validation — is scripted.
+
+== The Pattern: Orchestrator as Master
+
+The core idea is a *strict separation of concerns*:
+
+* A *deterministic orchestrator* (a plain CLI script) controls the entire workflow. It decides what happens, in what order, and validates every result.
+* An *AI agent or human* sits on the other end of stdin/stdout, ready to serve the orchestrator's requests — like a clerk filling out forms on demand.
+
+The orchestrator does _not know_ who is answering. It simply asks questions via `input()` and waits for answers on stdin. This makes it testable, predictable, and independent of any specific AI framework — or of AI at all.
+
+== How It Works
+
+[arabic]
+. *Trigger:* The user (or AI) starts the orchestrator with the required arguments. In an AI-assisted setup, a _skill_ file maps the user's intent to the correct orchestrator invocation.
+. *Deterministic steps:* The orchestrator runs sub-scripts in sequence — transforming data, calling APIs, validating outputs. No creativity involved.
+. *Input needed:* When the orchestrator needs a judgment call, it prints a clear request and blocks on `input()`. Whoever is on the other end — human or AI — provides the answer on stdin.
+. *Completion:* The orchestrator exits — with code 0 on success, or non-zero on failure. If an AI is driving, it reports the outcome to the user: a summary on success, or error analysis and suggested next steps on failure.
+
+[plantuml,workflow,svg]
+----
+@startuml
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam sequenceParticipantPadding 30
+
+title \nAI-Assisted Workflow Architecture\n(Generalized Pattern)
+
+actor User as user
+participant "AI Agent" as ai #LightPink
+participant "Skill\n(SKILL.md)" as skill #LightBlue
+participant "Orchestrator\n(workflow script)" as orch #LightGoldenRodYellow
+participant "Sub-Scripts" as sub #LightGray
+
+== Trigger ==
+
+user -> ai : User prompt\n(e.g. "Create a dependency matrix for ...")
+ai -> skill : Skill matches on keywords\nin user prompt
+skill -> ai : Instructions:\n"Start orchestrate.py with these args"
+ai -> orch : Starts as subprocess\n(stdin/stdout/stderr connected)
+
+== Deterministic Steps ==
+
+orch -> sub : Step 1 (scripted)
+sub --> orch : result
+orch -> sub : Step 2 (scripted)
+sub --> orch : result
+
+== Orchestrator Needs Input ==
+
+orch -[#blue]> ai : **input()**: request\n(e.g. "Provide X" / "Create file Y")
+
+note right of ai #LightPink
+  **AI decides autonomously:**
+  Can I handle this myself?
+  - YES → provide requested information
+  - NO → ask user first
+end note
+
+alt AI can handle it
+  ai -> ai : Produce requested information
+  ai -[#blue]> orch : answer on stdin
+else AI needs user input
+  ai -> user : Forward question to chat
+  user -> ai : Answer
+  ai -> ai : Process answer
+  ai -[#blue]> orch : answer on stdin
+end
+
+orch -> orch : Process answer
+
+== More Deterministic Steps ==
+
+orch -> sub : Step N (scripted)
+sub --> orch : result
+
+== Sub-Script Needs Input ==
+
+orch -> sub : Step M (scripted)
+sub -[#blue]> ai : **input()**: interactive prompt\n(e.g. auth, collision, confirmation)
+
+alt AI can handle it
+  ai -[#blue]> sub : answer on stdin
+else AI needs user input
+  ai -> user : Forward question
+  user -> ai : Answer
+  ai -[#blue]> sub : answer on stdin
+end
+
+sub --> orch : result
+
+== Completion ==
+
+orch --> ai : Exit 0
+ai -> user : Summary of results
+
+note over orch #LightGoldenRodYellow
+  **Orchestrator principles:**
+  • Holds the scepter — AI and user serve it
+  • Pure CLI program, no knowledge of AI
+  • All prompts via input(), context via stderr
+  • Never exits temporarily, never breaks flow
+  • Deterministic: same input → same output
+end note
+
+note over skill #LightBlue
+  **Skill's role:**
+  • Matches user intent → correct workflow
+  • Tells AI how to start the orchestrator
+  • Prompt-handling table: how to respond
+    to each orchestrator prompt
+end note
+
+note over ai #LightPink
+  **AI's role:**
+  • Dispatches user intent to skills
+  • Runs orchestrator as subprocess
+  • Responds to orchestrator prompts
+    (self-service or via user)
+  • Never takes initiative — only reacts
+end note
+
+@enduml
+----
+
+== Advantages
+
+[cols="1,2",options="header",]
+|===
+|Advantage |Explanation
+|*Determinism where it matters* |Step ordering, file naming, API calls, and validation are fully scripted. Same input → same output, every time.
+|*Unpredictability only where unavoidable* |Creative decisions (naming, summarizing, choosing between options) are the only points where human or AI judgment enters the process.
+|*Testable without AI* |The orchestrator is a plain CLI program. Pipe pre-recorded answers to stdin and you have a fully reproducible test. No AI framework, no API keys, no non-determinism.
+|*Transparent flow* |Every prompt and every response passes through the terminal. Nothing happens "magically" behind the scenes.
+|*Actor-agnostic* |The orchestrator works with any respondent: a human typing answers, an AI agent, or a test harness replaying recorded responses. No vendor lock-in.
+|*Recoverable* |If an answer causes a validation error or runtime failure, the orchestrator can re-ask. The evaluation of "correct" or "incorrect" is itself deterministic — defined by the script, not by judgment.
+|===
+
+[[disadvantages--trade-offs]]
+== Disadvantages & Trade-offs
+
+[cols="1,2",options="header",]
+|===
+|Disadvantage |Mitigation
+|*More upfront engineering* |Writing a proper orchestrator is more work than "just let the AI figure it out". Pays off when the workflow runs repeatedly, or when a single run iterates over many items that must be handled identically.
+|*Rigid step ordering* |The orchestrator defines a fixed pipeline. If the workflow fundamentally changes, the script must be updated. Partially mitigated by making steps idempotent and skippable.
+|*Prompt quality matters* |The orchestrator's `input()` prompts must be clear and self-contained so that any respondent — human or AI — can answer without additional context.
+|*Latency* |Each interaction adds a round-trip. For workflows with many creative steps, this can be slower than a single "do everything" prompt. Mitigated by transparent caching — see _Transparent Caching_ below.
+|===
+
+== Transparent Caching
+
+The orchestrator can avoid repeated round-trips by caching responses on disk. The cache is *transparent to the client* — the client always answers via `input()` on stdin and never needs to know whether its response will be cached or has been served from cache.
+
+The mechanism is simple. The orchestrator assigns each `input()` call an *input ID* and derives a *deterministic cache path* from it — for example `cache/++{++input++_++id}/++{++call++_++hash}` with `call++_++hash = sha256(call++_++args)`. Before asking, it checks whether a cached response already exists at that path:
+
+* *Cache hit:* The file exists. The orchestrator reads the cached response and skips the `input()` entirely — no round-trip, no waiting.
+* *Cache miss:* The file does not exist. The orchestrator asks the client via `input()` as usual, receives the answer on stdin, writes it to the cache path, and then proceeds.
+
+[plantuml,caching,svg]
+----
+@startuml
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam sequenceParticipantPadding 30
+skinparam sequenceGroupBorderColor #888888
+skinparam sequenceGroupBodyBackgroundColor transparent
+skinparam noteBorderColor #888888
+skinparam noteBackgroundColor #FFFFDD
+title \nTransparent Caching\n(Cache Hit vs. Cache Miss)
+
+actor "Client\n(human or AI)" as R
+participant "Orchestrator" as O #LightGoldenRodYellow
+participant "File System" as FS #LightGray
+
+== Trigger ==
+
+R -> O : orchestrate -​-source data.xml -​-lang EN
+O -> O : call_hash = sha256("lang=EN,source=data.xml")
+
+== input_1 — Cache Hit ==
+
+O -> FS : exists cache/input_1/{call_hash}?
+FS --> O : **yes**
+O -> FS : read cache/input_1/{call_hash}
+FS --> O : cached response
+O -> O : use response
+note right of O : No round-trip.\nNo waiting.
+
+== input_2 — Cache Miss ==
+
+O -> FS : exists cache/input_2/{call_hash}?
+FS --> O : **no**
+O -> R : "Please generate a\nsummary for {task}"
+R --> O : answer on stdin
+O -> FS : write to cache/input_2/{call_hash}
+O -> O : use response
+note right of O : Next run with same\ncall arguments → cache hit.
+@enduml
+----
+
+
+Same call arguments always produce the same hash, so the orchestrator can reduce an implicit "has this been answered before?" to a simple file-existence check.
+
+Not every step should be cached. The orchestrator designer decides per step:
+
+[cols="4,1,6",options="header",]
+|===
+|Step type |Cache? |Why
+|Credentials, confirmations, context-dependent choices |No |These are volatile by nature. If the answer were always the same, it would be a parameter — not a prompt.
+|Expensive creative output (summaries, generated files, translations) |Yes |Deterministic for the same call arguments, expensive to reproduce. On cache hit the client is never even asked.
+|===
+
+*Rule of thumb for orchestrator designers:* Cache anything that took effort to produce and is determined by the call arguments. Never cache anything sensitive, volatile, or trivially short.
+
+== When to Use This Pattern
+
+* *Repeatable workflows* that run more than once (data pipelines, report generation, environment provisioning), or single runs that iterate over many items with identical logic (generating 200 invoices, provisioning 20 environments)
+* *Mixed automation* where some steps are deterministic and others require judgment
+* *Audit requirements* where you need a traceable record of exactly what happened and what was decided
+* *Multi-actor pipelines* that combine scripts, APIs, and human or AI input
+
+== When NOT to Use It
+
+* *One-off tasks without repetitive steps* — if there is no loop and no need for consistency across items, just ask directly
+* *Purely creative work* — writing prose, brainstorming, design exploration
+* *Highly interactive workflows* — where every step depends on the previous response and there is no deterministic spine to script
+
+== Key Principles
+
+[arabic]
+. *The orchestrator holds the scepter.* Human and AI are respondents who only act when asked.
+. *No actor awareness in the orchestrator.* It does not know or care whether a human or AI is answering. All communication is via `input()` and `print()`.
+. *Minimize unpredictability.* Script everything that can be scripted. Only delegate to a respondent what genuinely requires judgment.
+. *Never exit temporarily.* The orchestrator runs from start to finish as a single process. If it needs information, it asks and waits.
+. *Validate everything.* After receiving an answer, the orchestrator checks it before proceeding. Trust no one — not the human, not the AI.

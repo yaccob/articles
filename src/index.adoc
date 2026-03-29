@@ -1,0 +1,4 @@
+= Articles +
+Various articles on different topics
+
+* link:ai-as-workflow-servant/[AI as Workflow Servant: How Deterministic Scripts Tame AI Unpredictability]
